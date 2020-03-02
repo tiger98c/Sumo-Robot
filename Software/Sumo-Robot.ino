@@ -16,24 +16,26 @@ SoftwareSerial odrive_serial(6, 7); //RX (ODrive TX), TX (ODrive RX)
 // ODrive object
 ODriveArduino odrive(odrive_serial);
 
-
 QTRSensors qtr;
 
-const uint8_t SensorCount = 4;
+const uint8_t SensorCount = 2;
 uint16_t sensorValues[SensorCount];
-
 
 const int echoPin = 8;
 const int trigPin = 9;
 
+
 float vel = 7000;
-int turn = 750;
+int turnDuration = 750;
 int threshold = 500;
 int rev = 500;
 bool invert = false;
 
-String inputString = "";
-String numString = "";
+
+String inputCommand = "";         // a String to hold incoming data
+String inputParam = "";
+bool stringComplete = false;  // whether the string is complete
+
 String state = "IDLE";
 
 bool msgReceived = false;
@@ -43,7 +45,7 @@ void setup() {
 
   // configure the sensors
   qtr.setTypeAnalog();
-  qtr.setSensorPins((const uint8_t[]){A0, A1, A2, A3}, SensorCount);
+  qtr.setSensorPins((const uint8_t[]){A0, A1}, SensorCount);
 
   
   pinMode(trigPin, OUTPUT);
@@ -86,10 +88,19 @@ void setup() {
 }
 
 void loop() {
+
+  // print the string when a newline arrives:
+  if (stringComplete) {
+    Serial.println(inputString);
+    // clear the string:
+    inputString = "";
+    stringComplete = false;
+  }
+  
   if (Serial.available()) { // Checks whether data is comming from the serial port
     msgReceived = true;
-    char inChar = "";
-    while (inChar != '\n') {
+    char input_char = "";
+    while (input_char != '\n') {
       if (Serial.available()) {
         inChar = (char)Serial.read(); //read the input
         if (inChar == '\n') {
@@ -102,7 +113,6 @@ void loop() {
           inputString += inChar;        //make a string of the characters coming on serial
         }
       }
-      delay(10);
     }
   }
 
@@ -220,7 +230,7 @@ void loop() {
           Serial << "Axis" << c << ": Requesting state " << requested_state << '\n';
           odrive.run_state(motornum, requested_state, false); // don't wait
         }
-      }  
+      }
       else {
         Serial.println(inputString + " is an invalid command...");
       }
@@ -237,7 +247,7 @@ void loop() {
       reverse(rev);
       left(turn);
     }
-    else if ((sensorValues[3] > threshold && invert) || (sensorValues[3] < threshold && !invert)) {
+    else if ((sensorValues[1] > threshold && invert) || (sensorValues[1] < threshold && !invert)) {
       reverse(rev);
       right(turn);
     }
@@ -252,6 +262,20 @@ void loop() {
   inputString = "";
   numString = "";
   msgReceived = false; 
+}
+
+void serialEvent() {
+  while (Serial.available()) {
+    // get the new byte:
+    char inChar = (char)Serial.read();
+    // add it to the inputString:
+    inputString += inChar;
+    // if the incoming character is a newline, set a flag so the main loop can
+    // do something about it:
+    if (inChar == '\n') {
+      stringComplete = true;
+    }
+  }
 }
 
 void forward(unsigned long ms) {
@@ -307,4 +331,3 @@ long microsecondsToCentimeters(long microseconds) {
 long distance() {
   return microsecondsToCentimeters(pingDuration());
 }
-
