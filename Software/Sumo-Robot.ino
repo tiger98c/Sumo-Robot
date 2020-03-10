@@ -1,6 +1,42 @@
 /*
  * Sumo remote bluetooth control
  */
+
+//<axis>.controller.config.pos_gain = 20.0 [(counts/s) / counts]
+//<axis>.controller.config.vel_gain = 5.0 / 10000.0 [A/(counts/s)]
+//<axis>.controller.config.vel_integrator_gain = 10.0 / 10000.0 [A/((counts/s) * s)]
+//An upcoming feature will enable automatic tuning. Until then, here is a rough tuning procedure:
+//
+//Set vel_integrator_gain gain to 0
+//Make sure you have a stable system. If it is not, decrease all gains until you have one.
+//Increase vel_gain by around 30% per iteration until the motor exhibits some vibration.
+//Back down vel_gain to 50% of the vibrating value.
+//Increase pos_gain by around 30% per iteration until you see some overshoot.
+//Back down pos_gain until you do not have overshoot anymore.
+//The integrator can be set to 0.5 * bandwidth * vel_gain, where bandwidth is the overall resulting 
+//tracking bandwidth of your system. Say your tuning made it track commands with a settling time of 100ms
+//(the time from when the setpoint changes to when the system arrives at the new setpoint); this means
+//the bandwidth was 1/(100ms) = 1/(0.1s) = 10hz. In this case you should set the vel_integrator_gain = 0.5 * 10 * vel_gain.
+
+//Parameter reading/writing
+//Not all parameters can be accessed via the ASCII protocol but at least all parameters with float and integer type are supported.
+//
+//Reading:
+// r [property]
+//property name of the property, as seen in ODrive Tool
+//response: text representation of the requested value
+//Example: r vbus_voltage => response: 24.087744
+//Writing:
+// w [property] [value]
+//property name of the property, as seen in ODrive Tool
+//value text representation of the value to be written
+//Example: w axis0.controller.pos_setpoint -123.456
+//System commands:
+//ss - Save config
+//se - Erase config
+//sr - Reboot
+
+
 #include <SoftwareSerial.h>
 #include <ODriveArduino.h>
 #include <QTRSensors.h>
@@ -32,13 +68,8 @@ int rev = 500;
 bool invert = false;
 
 
-String inputCommand = "";         // a String to hold incoming data
-String inputParam = "";
-bool stringComplete = false;  // whether the string is complete
-
 String state = "IDLE";
 
-bool msgReceived = false;
 
 void setup() {
   // put your setup code here, to run once:
@@ -88,35 +119,60 @@ void setup() {
 }
 
 void loop() {
-
-  // print the string when a newline arrives:
-  if (stringComplete) {
-    Serial.println(inputString);
-    // clear the string:
-    inputString = "";
-    stringComplete = false;
-  }
   
-  if (Serial.available()) { // Checks whether data is comming from the serial port
-    msgReceived = true;
-    char input_char = "";
-    while (input_char != '\n') {
-      if (Serial.available()) {
-        inChar = (char)Serial.read(); //read the input
-        if (inChar == '\n') {
-          break;
-        }
-        else if (isDigit(inChar)) {
-          numString += inChar;
-        }
-        else {
-          inputString += inChar;        //make a string of the characters coming on serial
-        }
-      }
+  if (state == "IDLE") {
+    brake();
+    delay(10);
+  }
+  else if (state == "BATTLE") {
+    qtr.read(sensorValues);
+    if ((sensorValues[0] > threshold && invert) || (sensorValues[0] < threshold && !invert)) {
+      reverse(rev);
+      left(turn);
+    }
+    else if ((sensorValues[1] > threshold && invert) || (sensorValues[1] < threshold && !invert)) {
+      reverse(rev);
+      right(turn);
+    }
+    else {
+      odrive.SetVelocity(0, -vel); //left
+      odrive.SetVelocity(1, vel);
+ 
+      delay(10);
     }
   }
+}
 
-  if (msgReceived) {
+
+String inputCommand = "";         // a String to hold incoming data
+String tempParam = "";
+int inputParam = 0;
+bool stringComplete = false;  // whether the string is complete
+
+void serialEvent() {
+  while (Serial.available() && ~stringComplete) {
+    // get the new byte:
+    char inChar = (char)Serial.read();
+    
+    // if the incoming character is a newline, set a flag so the main loop can
+    // do something about it:
+    if (isSpace(inChar)) {
+      continue;
+    }
+    else if (isDigit(inChar)) {
+      tempParam += inChar;
+    }
+    else if (inChar == '\n') {
+      inputParam = tempParam.toInt();
+      stringComplete = true;
+    }
+    else {
+      // add it to the inputString:
+      inputCommand += inChar;
+    }
+  }
+  
+  if (stringComplete) {
     if (numString != "") {
       if (inputString == "forward") {
         forward(numString.toInt());
@@ -235,46 +291,11 @@ void loop() {
         Serial.println(inputString + " is an invalid command...");
       }
     }
-  }
-  
-  if (state == "IDLE") {
-    brake();
-    delay(10);
-  }
-  else if (state == "BATTLE") {
-    qtr.read(sensorValues);
-    if ((sensorValues[0] > threshold && invert) || (sensorValues[0] < threshold && !invert)) {
-      reverse(rev);
-      left(turn);
-    }
-    else if ((sensorValues[1] > threshold && invert) || (sensorValues[1] < threshold && !invert)) {
-      reverse(rev);
-      right(turn);
-    }
-    else {
-      odrive.SetVelocity(0, -vel); //left
-      odrive.SetVelocity(1, vel);
- 
-      delay(10);
-    }
-  }
-  
-  inputString = "";
-  numString = "";
-  msgReceived = false; 
-}
-
-void serialEvent() {
-  while (Serial.available()) {
-    // get the new byte:
-    char inChar = (char)Serial.read();
-    // add it to the inputString:
-    inputString += inChar;
-    // if the incoming character is a newline, set a flag so the main loop can
-    // do something about it:
-    if (inChar == '\n') {
-      stringComplete = true;
-    }
+    
+    inputCommand = "";
+    tempParam = "";
+    inputParam = 0
+    stringComplete = false;
   }
 }
 
