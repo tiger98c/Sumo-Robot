@@ -68,6 +68,11 @@ int rev = 500;
 bool invert = false;
 
 
+// Generally, you should use "unsigned long" for variables that hold time
+// The value will quickly become too large for an int to store
+unsigned long previousMillis = 0;        // will store last time LED was updated
+unsigned long duration = 0;
+
 String state = "IDLE";
 
 
@@ -119,6 +124,13 @@ void setup() {
 }
 
 void loop() {
+
+  unsigned long currentMillis = millis();
+
+  if (currentMillis - previousMillis >= interval && duration != 0) {
+    previousMillis = currentMillis;
+    duration = 0;
+  }
   
   if (state == "IDLE") {
     brake();
@@ -163,7 +175,7 @@ void serialEvent() {
       tempParam += inChar;
     }
     else if (inChar == '\n') {
-      inputParam = tempParam.toInt();
+      inputParam = (isSpace(tempParam)) ? -1 : tempParam.toInt();
       stringComplete = true;
     }
     else {
@@ -173,21 +185,21 @@ void serialEvent() {
   }
   
   if (stringComplete) {
-    if (numString != "") {
-      if (inputString == "forward") {
-        forward(numString.toInt());
+    if (inputParam != -1) {
+      if (inputCommand == "forward" || inputCommand == "left" || inputCommand == "right" || inputCommand == "reverse") {
+        forward(inputParam);
         Serial.println("Forward OK");
       } 
       else if (inputString == "left") {
-        left(numString.toInt());
+        left(inputParam);
         Serial.println("Left OK");
       }
       else if (inputString == "right") {
-        right(numString.toInt());
+        right(inputParam);
         Serial.println("Right OK");
       }
       else if (inputString == "reverse") {
-        reverse(numString.toInt());
+        reverse(inputParam);
         Serial.println("Reverse OK");
       }
       else if (inputString == "vel") {
@@ -299,12 +311,29 @@ void serialEvent() {
   }
 }
 
+void moveAction(String action, unsigned long ms) {
+  if (inputCommand == "forward" || inputCommand == "left" || inputCommand == "right" || inputCommand == "reverse") {
+      forward(inputParam);
+      Serial.println("Forward OK");
+    } 
+    else if (inputString == "left") {
+      left(inputParam);
+      Serial.println("Left OK");
+    }
+    else if (inputString == "right") {
+      right(inputParam);
+      Serial.println("Right OK");
+    }
+    else if (inputString == "reverse") {
+      reverse(inputParam);
+      Serial.println("Reverse OK");
+    }
+}
+
 void forward(unsigned long ms) {
   odrive.SetVelocity(0, -vel); //left
   odrive.SetVelocity(1, vel);
- 
-  delay(ms);
-  brake();
+  duration = ms;
 }
 
 void right(unsigned long ms) {
