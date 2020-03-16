@@ -2,6 +2,282 @@
  * Sumo remote bluetooth control
  */
 
+#include <SoftwareSerial.h>
+#include <ODriveArduino.h>
+#include <QTRSensors.h>
+
+// Printing with stream operator
+template<class T> inline Print& operator <<(Print &obj,     T arg) { obj.print(arg);    return obj; }
+template<>        inline Print& operator <<(Print &obj, float arg) { obj.print(arg, 4); return obj; }
+
+// Serial to the ODrive
+SoftwareSerial odrive_serial(7,6); //RX (ODrive TX), TX (ODrive RX)
+// Note: you must also connect GND on ODrive to GND on Arduino!
+
+// ODrive object
+ODriveArduino odrive(odrive_serial);
+
+QTRSensors qtr;
+
+const uint8_t SensorCount = 2;
+uint16_t sensorValues[SensorCount];
+
+const int echoPin = 8;
+const int trigPin = 9;
+
+float vel = 7000.0f;
+unsigned long turnDuration = 750;
+unsigned long threshold = 500;
+unsigned long revDuration = 500;
+bool invert = false;
+
+// Generally, you should use "unsigned long" for variables that hold time
+// The value will quickly become too large for an int to store
+unsigned long previousMillis = 0;        // will store last time LED was updated
+unsigned long interval = 0;
+
+String state = "IDLE";
+
+
+void setup() {
+  // configure the sensors
+  qtr.setTypeAnalog();
+  qtr.setSensorPins((const uint8_t[]){A0, A1}, SensorCount);
+
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+
+  // ODrive uses 115200 baud
+  odrive_serial.begin(115200);
+
+  Serial.begin(9600); // Default communication rate of the Bluetooth module
+  while (!Serial) ; // wait for Arduino Serial Monitor to open
+
+  Serial.println("ODriveArduino");
+  Serial.println("Setting parameters...");
+  
+//  setVelocityMax(22000.0f);
+//  setCurrentMax(15.0f);
+  
+  // In this example we set the same parameters to both motors.
+  // You can of course set them different if you want.
+  // See the documentation or play around in odrivetool to see the available parameters
+//  motorCalibration();
+
+  help();
+}
+
+void loop() {
+
+//  qtr.read(sensorValues);
+//  bool rightEdgeTrig = (sensorValues[0] > threshold && invert) || (sensorValues[0] < threshold && !invert);
+//  bool leftEdgeTrig = (sensorValues[1] > threshold && invert) || (sensorValues[1] < threshold && !invert);
+//  
+//  unsigned long currentMillis = millis();
+//  if ((currentMillis - previousMillis >= interval) && (interval != 0)) {
+////    previousMillis = currentMillis;
+////    interval = 0;
+//  }
+//  
+//  if (state == "IDLE") {
+//    brake();
+//    delay(10);
+//  }
+//  else if (state == "BATTLE") {
+//    qtr.read(sensorValues);
+//    if ((sensorValues[0] > threshold && invert) || (sensorValues[0] < threshold && !invert)) {
+//      reverse(revDuration);
+//      left(turnDuration);
+//    }
+//    else if ((sensorValues[1] > threshold && invert) || (sensorValues[1] < threshold && !invert)) {
+//      reverse(revDuration);
+//      right(turnDuration);
+//    }
+//    else {
+//      odrive.SetVelocity(0, -vel); //left
+//      odrive.SetVelocity(1, vel);
+// 
+//      delay(10);
+//    }
+//  }
+}
+
+
+String inputCommand = "";         // a String to hold incoming data
+String inputParam = "";
+bool stringComplete = false;  // whether the string is complete
+
+void serialEvent() {
+    
+  while (Serial.available() && ~stringComplete) {
+    // get the new byte:
+    char inChar = (char)Serial.read();
+    
+    // if the incoming character is a newline, set a flag so the main loop can
+    // do something about it:
+    
+    if (isDigit(inChar) || inChar == '.') {
+      inputParam += inChar;
+    }
+    else if (inChar == '\n') {
+      stringComplete = true;
+    }
+    else if (isSpace(inChar)) {
+      continue;
+    }
+    else {
+      // add it to the inputString:
+      inputCommand += inChar;
+    }
+  }
+  
+  if (stringComplete) {
+    if (inputParam != "") {
+      if (inputCommand == "forward" || inputCommand == "left" || inputCommand == "right" || inputCommand == "reverse") {
+        moveAction(inputCommand, inputParam.toFloat(), vel);
+      }
+      else if (inputCommand == "set_vel") {
+        vel = inputParam.toFloat();
+        Serial.println(F("Velocity updated!"));
+      }
+      else if (inputCommand == "set_threshold") {
+        threshold = inputParam.toInt();
+        Serial.println(F("Threshold updated!"));
+      }
+      else if (inputCommand == "set_turn") {
+        turnDuration = inputParam.toInt();
+        Serial.println(F("Turn duration updated!"));
+      }
+      else if (inputCommand == "set_rev") {
+        revDuration = inputParam.toInt();
+        Serial.println(F("Reverse duration updated!"));
+      }
+      else if (inputCommand == "pre_calibrate") {
+        Serial.println(F("Setting pre-calibration status!"));
+        for (int axis = 0; axis < 2; ++axis) {
+          if (inputParam == "1"){
+            odrive_serial << "w axis" << axis << ".motor.config.pre_calibrated " << true << '\n';
+          }
+          else if (inputParam == "0"){
+            odrive_serial << "w axis" << axis << ".motor.config.pre_calibrated " << false << '\n';
+          }
+          else {
+            Serial.println(F("Error: Invalid boolean, put a \'1\' or \'0\'."));
+          }
+        }
+      }
+      else if (inputCommand == "pos_gain") {
+        for (int axis = 0; axis < 2; axis++) {
+          odriveAxisWriteFloat(axis, ".controller.config.pos_gain", inputParam.toFloat());
+        }
+      }
+      else if (inputCommand == "vel_gain") {
+        for (int axis = 0; axis < 2; axis++) {
+          odriveAxisWriteFloat(axis, ".controller.config.vel_gain", inputParam.toFloat());
+        }
+      }
+      else if (inputCommand == "vel_integrator_gain") {
+        for (int axis = 0; axis < 2; axis++) {
+          odriveAxisWriteFloat(axis, ".controller.config.vel_integrator_gain", inputParam.toFloat());
+        }
+      }
+      else if (inputCommand == "max_current") {
+        setCurrentMax(inputParam.toFloat());
+        Serial.println(F("Max current updated!"));
+      }
+      else if (inputCommand == "max_vel") {
+        setVelocityMax(inputParam.toFloat());
+        Serial.println(F("Max velocity updated!"));
+      }
+      else {
+        Serial.println("Error: " + inputCommand + " is an invalid command...");
+      }
+    }
+    else { //operations that do not need a numerical argument
+      if (inputCommand == "info") {
+        Serial << "Velocity: " << vel << ", Threshold: " << threshold 
+               << ", Turn Duration: " << turnDuration << ", Reverse Duration: " << revDuration << '\n';
+        
+        Serial << "Distance: " << distance() << "cm\n";
+        
+        Serial.print("Reflectance: ");
+        qtr.read(sensorValues);
+        for (uint8_t i = 0; i < SensorCount; i++) {
+          Serial << sensorValues[i] << '\t';
+        }
+        Serial << '\n';
+
+        odrive_serial << "r vbus_voltage\n";
+        Serial << "Vbus voltage: " << odrive.readFloat() << '\n';
+
+        for (int axis = 0; axis < 2; ++axis) {
+//          odrive_serial << "r axis" << axis << ".controller.config.vel_limit\n";
+          Serial << "Axis " << axis << "\nVelocity limit: " << odriveAxisReadFloat(axis, ".controller.config.vel_limit");
+//          odrive_serial << "r axis" << axis << ".motor.config.current_lim\n";
+          Serial << ", Current limit: " << odriveAxisReadFloat(axis, ".motor.config.current_lim") << '\n';
+
+//          odrive_serial << "r axis" << axis <<".controller.config.pos_gain\n";
+          Serial << "Pos gain: " << odriveAxisReadFloat(axis, ".controller.config.pos_gain\n");
+//          odrive_serial << "r axis" << axis <<".controller.config.vel_gain\n";
+          Serial << ", Vel gain: " << odriveAxisReadFloat(axis,".controller.config.vel_gain\n");
+//          odrive_serial << "r axis" << axis <<".controller.config.vel_integrator_gain\n";
+          Serial << ", Vel integrator gain: " << odriveAxisReadFloat(axis, ".controller.config.vel_integrator_gain\n") << "\n";
+          
+//          odrive_serial << "r axis" << axis <<".motor.config.phase_resistance\n";
+          Serial << "Phase resistance: " << odriveAxisReadFloat(axis, ".motor.config.phase_resistance\n");
+//          odrive_serial << "r axis" << axis <<".motor.config.phase_inductance\n";
+          Serial << ", Phase inductance: " << odriveAxisReadFloat(axis, ".motor.config.phase_inductance\n") << "\n\n";
+        }
+      }
+      else if (inputCommand == "help") {
+        help();
+      }
+      else if (inputCommand == "calibrate") {
+        motorCalibration();
+      }
+      else if (inputCommand == "save") {
+        Serial.println(F("Saved config!"));
+        odrive_serial << "ss\n";
+      }
+      else if (inputCommand == "erase") {
+        Serial.println(F("Erased config!"));
+        odrive_serial << "se\n";
+      }
+      else if (inputCommand == "reboot") {
+        Serial.println(F("Rebooting odrive!"));
+        odrive_serial << "sr\n";
+      }
+      else if (inputCommand == "invert") {
+         invert = !invert;
+         Serial.println(F("Invert updated!"));
+      }
+      else if (inputCommand == "start") {
+        delay(5000);
+        for (int i = 5; i >= 0; i--) {
+          Serial << F("Countdown: ") << i << '\n';
+        }
+        state = "BATTLE";
+      }
+      else if (inputCommand == "quick_start") {
+        Serial.println(F("Mode: Battle"));
+        state = "BATTLE";
+      }
+      else if (inputCommand == "stop") {
+        Serial.println(F("Mode: Idle"));
+        state = "IDLE";
+      }
+      else {
+        Serial.println(inputCommand + " is an invalid command...");
+      }
+    }
+    
+    inputCommand = "";
+    inputParam = "";
+    stringComplete = false;
+  }
+}
+
+
 //<axis>.controller.config.pos_gain = 20.0 [(counts/s) / counts]
 //<axis>.controller.config.vel_gain = 5.0 / 10000.0 [A/(counts/s)]
 //<axis>.controller.config.vel_integrator_gain = 10.0 / 10000.0 [A/((counts/s) * s)]
@@ -36,331 +312,115 @@
 //se - Erase config
 //sr - Reboot
 
-
-#include <SoftwareSerial.h>
-#include <ODriveArduino.h>
-#include <QTRSensors.h>
-
-// Printing with stream operator
-template<class T> inline Print& operator <<(Print &obj,     T arg) { obj.print(arg);    return obj; }
-template<>        inline Print& operator <<(Print &obj, float arg) { obj.print(arg, 4); return obj; }
-
-// Serial to the ODrive
-SoftwareSerial odrive_serial(6, 7); //RX (ODrive TX), TX (ODrive RX)
-// Note: you must also connect GND on ODrive to GND on Arduino!
-
-// ODrive object
-ODriveArduino odrive(odrive_serial);
-
-QTRSensors qtr;
-
-const uint8_t SensorCount = 2;
-uint16_t sensorValues[SensorCount];
-
-const int echoPin = 8;
-const int trigPin = 9;
+void help() {
+  Serial.println(F("Ready!"));
+  Serial.println(F("Send the character 'c, c0' or 'c1' to calibrate respective motor (you must do this before you can command movement)"));
+  Serial.println(F("Send the character 'b' to read bus voltage"));
+  Serial.println(F("Send the string    'd' to read from the ultrasonic sensor"));
+  Serial.println(F("Send the string    'r' to read from the QTR sensor array"));
+  Serial.println(F("Send the string    'forward[t_ms]' to go forward"));
+  Serial.println(F("Send the string    'left[t_ms]' to go left"));
+  Serial.println(F("Send the string    'right[t_ms]' to go right"));
+  Serial.println(F("Send the string    'reverse[t_ms]' to go reverse"));
+  Serial.println(F("Send the string    'vel[num]'"));
+  Serial.println(F("Send the string    'turn[num]'"));
+  Serial.println(F("Send the string    'rev[num]'"));
+  Serial.println(F("Send the string    'threshold[num]'"));
+  Serial.println(F("Send the string    'current[num]'"));
+  Serial.println(F("Send the string    'maxvel[num]'"));
+  Serial.println(F("Send the string    'invert'"));
+}
 
 
-float vel = 7000;
-int turnDuration = 750;
-int threshold = 500;
-int rev = 500;
-bool invert = false;
+float odriveAxisReadFloat(int axis, String property) {
+  odrive_serial << "r axis" << axis << property << '\n';
+  return odrive.readFloat();
+}
 
+void odriveAxisWriteFloat(int axis, String property, float val) {
+  odrive_serial << "w axis" << axis << property << val << " \n";
+}
 
-// Generally, you should use "unsigned long" for variables that hold time
-// The value will quickly become too large for an int to store
-unsigned long previousMillis = 0;        // will store last time LED was updated
-unsigned long duration = 0;
+void motorCalibration() {
+  for (int motornum = 0; motornum < 2; motornum++) {
+    char c = motornum + '0';
+    int requested_state;
+    
+    requested_state = ODriveArduino::AXIS_STATE_MOTOR_CALIBRATION;
+    Serial << "Axis" << c << ": Requesting state " << requested_state << '\n';
+    odrive.run_state(motornum, requested_state, true);
+    
+    requested_state = ODriveArduino::AXIS_STATE_ENCODER_OFFSET_CALIBRATION;
+    Serial << "Axis" << c << ": Requesting state " << requested_state << '\n';
+    odrive.run_state(motornum, requested_state, true);
+    
+    requested_state = ODriveArduino::AXIS_STATE_CLOSED_LOOP_CONTROL;
+    Serial << "Axis" << c << ": Requesting state " << requested_state << '\n';
+    odrive.run_state(motornum, requested_state, false); // don't wait
+  }
+}
 
-String state = "IDLE";
-
-
-void setup() {
-  // put your setup code here, to run once:
-
-  // configure the sensors
-  qtr.setTypeAnalog();
-  qtr.setSensorPins((const uint8_t[]){A0, A1}, SensorCount);
-
-  
-  pinMode(trigPin, OUTPUT);
-  pinMode(echoPin, INPUT);
-
-  // ODrive uses 115200 baud
-  odrive_serial.begin(115200);
-
-  Serial.begin(9600); // Default communication rate of the Bluetooth module
-  while (!Serial) ; // wait for Arduino Serial Monitor to open
-
-  Serial.println("ODriveArduino");
-  Serial.println("Setting parameters...");
-
-  // In this example we set the same parameters to both motors.
-  // You can of course set them different if you want.
-  // See the documentation or play around in odrivetool to see the available parameters
+void setVelocityMax(float vel) {
   for (int axis = 0; axis < 2; ++axis) {
-    odrive_serial << "w axis" << axis << ".controller.config.vel_limit " << 22000.0f << '\n';
-    odrive_serial << "w axis" << axis << ".motor.config.current_lim " << 15.0f << '\n';
-    // This ends up writing something like "w axis0.motor.config.current_lim 10.0\n"
-  }
-
-  Serial.println("Ready!");
-  Serial.println("Send the character 'c, c0' or 'c1' to calibrate respective motor (you must do this before you can command movement)");
-  Serial.println("Send the character 'b' to read bus voltage");
-  Serial.println("Send the string    'd' to read from the ultrasonic sensor");
-  Serial.println("Send the string    'r' to read from the QTR sensor array");
-  Serial.println("Send the string    'forward[t_ms]' to go forward");
-  Serial.println("Send the string    'left[t_ms]' to go left");
-  Serial.println("Send the string    'right[t_ms]' to go right");
-  Serial.println("Send the string    'reverse[t_ms]' to go reverse");
-  Serial.println("Send the string    'vel[num]'");
-  Serial.println("Send the string    'turn[num]'");
-  Serial.println("Send the string    'rev[num]'");
-  Serial.println("Send the string    'threshold[num]'");
-  Serial.println("Send the string    'current[num]'");
-  Serial.println("Send the string    'maxvel[num]'");
-  Serial.println("Send the string    'invert'");
-}
-
-void loop() {
-
-  unsigned long currentMillis = millis();
-
-  if (currentMillis - previousMillis >= interval && duration != 0) {
-    previousMillis = currentMillis;
-    duration = 0;
-  }
-  
-  if (state == "IDLE") {
-    brake();
-    delay(10);
-  }
-  else if (state == "BATTLE") {
-    qtr.read(sensorValues);
-    if ((sensorValues[0] > threshold && invert) || (sensorValues[0] < threshold && !invert)) {
-      reverse(rev);
-      left(turn);
-    }
-    else if ((sensorValues[1] > threshold && invert) || (sensorValues[1] < threshold && !invert)) {
-      reverse(rev);
-      right(turn);
-    }
-    else {
-      odrive.SetVelocity(0, -vel); //left
-      odrive.SetVelocity(1, vel);
- 
-      delay(10);
-    }
+    odriveAxisWriteFloat(axis, ".controller.config.vel_limit", vel);
+//    odrive_serial << "w axis" << axis << ".controller.config.vel_limit " << vel << '\n';
   }
 }
 
-
-String inputCommand = "";         // a String to hold incoming data
-String tempParam = "";
-int inputParam = 0;
-bool stringComplete = false;  // whether the string is complete
-
-void serialEvent() {
-  while (Serial.available() && ~stringComplete) {
-    // get the new byte:
-    char inChar = (char)Serial.read();
-    
-    // if the incoming character is a newline, set a flag so the main loop can
-    // do something about it:
-    if (isSpace(inChar)) {
-      continue;
-    }
-    else if (isDigit(inChar)) {
-      tempParam += inChar;
-    }
-    else if (inChar == '\n') {
-      inputParam = (isSpace(tempParam)) ? -1 : tempParam.toInt();
-      stringComplete = true;
-    }
-    else {
-      // add it to the inputString:
-      inputCommand += inChar;
-    }
-  }
-  
-  if (stringComplete) {
-    if (inputParam != -1) {
-      if (inputCommand == "forward" || inputCommand == "left" || inputCommand == "right" || inputCommand == "reverse") {
-        forward(inputParam);
-        Serial.println("Forward OK");
-      } 
-      else if (inputString == "left") {
-        left(inputParam);
-        Serial.println("Left OK");
-      }
-      else if (inputString == "right") {
-        right(inputParam);
-        Serial.println("Right OK");
-      }
-      else if (inputString == "reverse") {
-        reverse(inputParam);
-        Serial.println("Reverse OK");
-      }
-      else if (inputString == "vel") {
-        vel = numString.toInt();
-      }
-      else if (inputString == "threshold") {
-        threshold = numString.toInt();
-      }
-      else if (inputString == "turn") {
-        turn = numString.toInt();
-      }
-      else if (inputString == "rev") {
-        rev = numString.toInt();
-      }
-      else if (inputString == "current") {
-        for (int axis = 0; axis < 2; ++axis) {
-          odrive_serial << "w axis" << axis << ".motor.config.current_lim " << numString.toInt() << '\n';
-          // This ends up writing something like "w axis0.motor.config.current_lim 10.0\n"
-        }
-      }
-      else if (inputString == "maxvel") {
-        for (int axis = 0; axis < 2; ++axis) {
-          odrive_serial << "w axis" << axis << ".controller.config.vel_limit " << numString.toInt() << '\n';
-          // This ends up writing something like "w axis0.motor.config.current_lim 10.0\n"
-        }
-      }
-      else if (inputString == "c") {
-        int motornum = numString.toInt();
-        char c = motornum + '0';
-        int requested_state;
-        
-        requested_state = ODriveArduino::AXIS_STATE_MOTOR_CALIBRATION;
-        Serial << "Axis" << c << ": Requesting state " << requested_state << '\n';
-        odrive.run_state(motornum, requested_state, true);
-        
-        requested_state = ODriveArduino::AXIS_STATE_ENCODER_OFFSET_CALIBRATION;
-        Serial << "Axis" << c << ": Requesting state " << requested_state << '\n';
-        odrive.run_state(motornum, requested_state, true);
-        
-        requested_state = ODriveArduino::AXIS_STATE_CLOSED_LOOP_CONTROL;
-        Serial << "Axis" << c << ": Requesting state " << requested_state << '\n';
-        odrive.run_state(motornum, requested_state, false); // don't wait
-      }  
-      else {
-        Serial.println(inputString + " is an invalid command...");
-      }
-    }
-    else { //operations that do not need a numerical argument
-      if (inputString == "d") {
-        Serial.print("Distance: ");
-        Serial.print(distance());
-        Serial.println("cm");
-      }
-      else if (inputString == "invert") {
-         invert = !invert;
-      }
-      else if (inputString == "r") {
-        Serial.print("Reflectance: ");
-        qtr.read(sensorValues);
-        for (uint8_t i = 0; i < SensorCount; i++)
-          {
-            Serial.print(sensorValues[i]);
-            Serial.print('\t');
-          }
-        Serial.println("");
-      }
-      else if (inputString == "b") {
-        odrive_serial << "r vbus_voltage\n";
-        Serial << "Vbus voltage: " << odrive.readFloat() << '\n';
-      }
-      else if (inputString == "start") {
-        delay(5000);
-        state = "BATTLE";
-      }
-      else if (inputString == "qs") {
-        state = "BATTLE";
-      }
-      else if (inputString == "stop") {
-        state = "IDLE";
-      }
-      else if (inputString == "c") {
-        for (int motornum = 0; motornum < 2; motornum++) {
-//          int motornum = numString.toInt();
-          char c = motornum + '0';
-          int requested_state;
-          
-          requested_state = ODriveArduino::AXIS_STATE_MOTOR_CALIBRATION;
-          Serial << "Axis" << c << ": Requesting state " << requested_state << '\n';
-          odrive.run_state(motornum, requested_state, true);
-          
-          requested_state = ODriveArduino::AXIS_STATE_ENCODER_OFFSET_CALIBRATION;
-          Serial << "Axis" << c << ": Requesting state " << requested_state << '\n';
-          odrive.run_state(motornum, requested_state, true);
-          
-          requested_state = ODriveArduino::AXIS_STATE_CLOSED_LOOP_CONTROL;
-          Serial << "Axis" << c << ": Requesting state " << requested_state << '\n';
-          odrive.run_state(motornum, requested_state, false); // don't wait
-        }
-      }
-      else {
-        Serial.println(inputString + " is an invalid command...");
-      }
-    }
-    
-    inputCommand = "";
-    tempParam = "";
-    inputParam = 0
-    stringComplete = false;
+void setCurrentMax(float current) {
+  for (int axis = 0; axis < 2; ++axis) {
+    odriveAxisWriteFloat(axis, ".motor.config.current_lim", current);
+//    odrive_serial << "w axis" << axis << ".motor.config.current_lim " << current << '\n';
+    // This ends up writing something like "w axis0.motor.config.current_lim 15.0\n"
   }
 }
 
-void moveAction(String action, unsigned long ms) {
-  if (inputCommand == "forward" || inputCommand == "left" || inputCommand == "right" || inputCommand == "reverse") {
-      forward(inputParam);
-      Serial.println("Forward OK");
-    } 
-    else if (inputString == "left") {
-      left(inputParam);
-      Serial.println("Left OK");
-    }
-    else if (inputString == "right") {
-      right(inputParam);
-      Serial.println("Right OK");
-    }
-    else if (inputString == "reverse") {
-      reverse(inputParam);
-      Serial.println("Reverse OK");
-    }
+void moveAction(String action, unsigned long ms, float vel) {
+  if (inputCommand == "forward") {
+    forward(vel);
+    Serial.println("Forward OK");
+  } 
+  else if (inputCommand == "left") {
+    left(vel);
+    Serial.println("Left OK");
+  }
+  else if (inputCommand == "right") {
+    right(vel);
+    Serial.println("Right OK");
+  }
+  else if (inputCommand == "reverse") {
+    reverse(vel);
+    Serial.println("Reverse OK");
+  }
+  delay(ms);
+  brake();
 }
 
-void forward(unsigned long ms) {
+void forward(float vel) {
   odrive.SetVelocity(0, -vel); //left
   odrive.SetVelocity(1, vel);
-  duration = ms;
 }
 
-void right(unsigned long ms) {
+void right(float vel) {
   odrive.SetVelocity(0, -vel);
   odrive.SetVelocity(1, -vel);
-  delay(ms);
-  brake();
 }
 
-void left(unsigned long ms) {
+void left(float vel) {
   odrive.SetVelocity(0, vel);
   odrive.SetVelocity(1, vel);
-  delay(ms);
-  brake();
 }
 
-void reverse(unsigned long ms) {
+void reverse(float vel) {
   odrive.SetVelocity(0, vel);
   odrive.SetVelocity(1, -vel);
-  delay(ms);
-  brake();
 }
 
-void brake(){
+void brake() {
   odrive.SetVelocity(0, 0.0f);
   odrive.SetVelocity(1, 0.0f);
 }
+
 
 long pingDuration() {
   digitalWrite(trigPin, LOW);
