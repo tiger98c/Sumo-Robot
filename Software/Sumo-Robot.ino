@@ -25,29 +25,41 @@ uint16_t sensorValues[SensorCount];
 const int echoPin = 8;
 const int trigPin = 9;
 
-float vel = 15000.0f;
-unsigned long inverseDuration = 50;
-unsigned long turnDuration = 750;
-unsigned long revDuration = 500;
+//cpr 2400 is equivalent to a unit of distance which is  proportional to the diameter of the wheels
+const float CPR = 2400.0f;
+float vel = 15000.0f; 
+
+float inverseRev = 0.3f;
+float turnRev = 4.6f;
+float reverseRev = 3.1f;
+unsigned long inverseDuration = 0;
+unsigned long turnDuration = 0;
+unsigned long reverseDuration = 0;
+
+unsigned long tornadoDuration = 2000;
+
 unsigned long infraredThreshold = 500;
 long distThreshold = 20;
 bool invert = false;
 
 // Generally, you should use "unsigned long" for variables that hold time
 // The value will quickly become too large for an int to store
-unsigned long previousMillis = 0;        // will store last time LED was updated
-unsigned long interval = 0;
+unsigned long previousMillis = 0;
+bool counterActive = false;
 
 enum move_state_t {MS_IDLE, MS_FORWARD, MS_LEFT, MS_RIGHT, MS_REVERSE};
 move_state_t move_state = MS_IDLE;
 
-enum game_state_t {GS_IDLE, 
-                   GS_BATTLE_MAIN, 
-                   GS_BATTLE_EDGE,
-                   GS_BATTLE_SCAN,
-                   GS_BATTLE_TARGET,
-                   GS_BATTLE_TORNADO,
-                   GS_BATTLE_SNAKE};
+const unsigned long TIMEOUT = 200;
+
+enum game_state_t { GS_IDLE,
+                    GS_REMOTE_CONTROL,
+                    GS_BATTLE_MAIN,
+                    GS_BATTLE_EDGE,
+                    GS_BATTLE_SCAN,
+                    GS_BATTLE_TARGET,
+                    GS_BATTLE_TORNADO,
+                    GS_BATTLE_SNAKE};
 game_state_t game_state = GS_IDLE;
 
 
@@ -67,13 +79,35 @@ void setup() {
 
   Serial.println("ODriveArduino");
   Serial.println("Setting parameters...");
+  
+  updateTimingParams();
+  motorCalibration();
 
   help();
 }
 
-void loop() {
 
+void loop() {
+  
+  bool eventTrigger = false;
+  
+  unsigned long currentMillis = millis();
+  if ((currentMillis >= previousMillis) && counterActive) {
+    eventTrigger = true;
+  }
+
+  switch(game_state) {
+    case GS_IDLE:
+
+      break;
+    case default:
+      
+      break;
+  }
   if (game_state == GS_IDLE) {
+
+  }
+  else if (game_state == GS_REMOTE_CONTROL) {
     if (move_state != MS_IDLE) {
       move_state = MS_IDLE;
       brake();
@@ -87,14 +121,10 @@ void loop() {
     
     bool distTrig = distThreshold < distance();
     
-    unsigned long currentMillis = millis();
-    if ((currentMillis - previousMillis >= interval) && (interval != 0)) {
-  //    previousMillis = currentMillis;
-  //    interval = 0;
-    }
-    
     if (game_state == GS_BATTLE_MAIN) {
-      
+      if (eventTrigger) { //stop movement
+        hardBrake();
+      }
     }
     else if (game_state == GS_BATTLE_EDGE) {
       if (rightEdgeTrig && leftEdgeTrig) {
@@ -104,7 +134,7 @@ void loop() {
         else {
           left(vel);
         }
-        interval = turnDuration;
+        
       }
     }
     else if (game_state == GS_BATTLE_SCAN) {
@@ -120,7 +150,7 @@ void loop() {
       
     }
   }
-
+  
 }
 
 
@@ -155,23 +185,26 @@ void serialEvent() {
   if (stringComplete) {
     if (inputParam != "") {
       if (inputCommand == "forward" || inputCommand == "left" || inputCommand == "right" || inputCommand == "reverse") {
-        moveAction(inputCommand, inputParam.toFloat(), vel);
+        moveAction(inputCommand, vel);
+        delay(inputParam.toFloat());
+        hardBrake();
       }
-      else if (inputCommand == "set_vel") {
-        vel = inputParam.toFloat();
-        Serial.println(F("Velocity updated!"));
-      }
-      else if (inputCommand == "set_inverse") {
-        inverseDuration = inputParam.toInt();
-        Serial.println(F("Inverse duration updated!"));
-      }
-      else if (inputCommand == "set_turn") {
-        turnDuration = inputParam.toInt();
-        Serial.println(F("Turn duration updated!"));
-      }
-      else if (inputCommand == "set_rev") {
-        revDuration = inputParam.toInt();
-        Serial.println(F("Reverse duration updated!"));
+      else if (inputCommand == "set_vel" || inputCommand == "set_inverse" || inputCommand == "set_turn" || inputCommand == "set_reverse") {
+        if (inputCommand == "set_vel") {
+          vel = inputParam.toFloat();
+        }
+        else if (inputCommand == "set_inverse") {
+          inverseRev = inputParam.toFloat();
+        }
+        else if (inputCommand == "set_turn") {
+          turnRev = inputParam.toFloat();
+        }
+        else if (inputCommand == "set_reverse") {
+          reverseRev = inputParam.toFloat();
+        }
+        
+        updateTimingParams();
+        Serial.println(F("Parameter updated!"));
       }
       else if (inputCommand == "set_infraredThreshold") {
         infraredThreshold = inputParam.toInt();
@@ -219,28 +252,32 @@ void serialEvent() {
         setVelocityMax(inputParam.toFloat());
         
       }
-      else if (inputCommand == "pre_calibrate") {
-        Serial.println(F("Setting pre-calibration status!"));
-        for (int axis = 0; axis < 2; ++axis) {
-          if (inputParam == "1"){
-            odrive_serial << "w axis" << axis << ".motor.config.pre_calibrated " << true << '\n';
-          }
-          else if (inputParam == "0"){
-            odrive_serial << "w axis" << axis << ".motor.config.pre_calibrated " << false << '\n';
-          }
-          else {
-            Serial.println(F("Error: Invalid boolean, put a \'1\' or \'0\'."));
-          }
-        }
-      }
+//      else if (inputCommand == "pre_calibrate") {
+//        Serial.println(F("Setting pre-calibration status!"));
+//        for (int axis = 0; axis < 2; ++axis) {
+//          if (inputParam == "1"){
+//            odrive_serial << "w axis" << axis << ".motor.config.pre_calibrated " << true << '\n';
+//          }
+//          else if (inputParam == "0"){
+//            odrive_serial << "w axis" << axis << ".motor.config.pre_calibrated " << false << '\n';
+//          }
+//          else {
+//            Serial.println(F("Error: Invalid boolean, put a \'1\' or \'0\'."));
+//          }
+//        }
+//      }
       else {
         Serial.println("Error: " + inputCommand + " is an invalid command...");
       }
     }
     else { //operations that do not need a numerical argument
       if (inputCommand == "info") {
-        Serial << "Velocity: " << vel << ", IR Threshold: " << infraredThreshold << ", Distance Threshold: " << distThreshold
-               << ", Turn Duration: " << turnDuration << ", Reverse Duration: " << revDuration << '\n';
+        Serial << "Velocity: " << vel << ", IR Threshold: " << infraredThreshold << ", Distance Threshold: " << distThreshold << '\n';
+        
+        Serial << "Inverse revolutions: " << inverseRev << ", Turn Duration: " << inverseDuration << '\n';
+        Serial << "Turn revolutions: " << turnRev << ", Turn Duration: " << turnDuration << '\n';
+        Serial << "Reverse revolutions: " << reverseRev <<", Reverse Duration: " << reverseDuration << '\n';
+        
         
         Serial << "Distance: " << distance() << "cm\n";
         
@@ -250,14 +287,14 @@ void serialEvent() {
           Serial << sensorValues[i] << '\t';
         }
         Serial << '\n';
-
+        
         odrive_serial << "r vbus_voltage\n";
         Serial << "Vbus voltage: " << odrive.readFloat() << '\n';
-
+        
         for (int axis = 0; axis < 2; ++axis) {
           Serial << "Axis " << axis << "\nVelocity limit: " << odriveAxisReadFloat(axis, ".controller.config.vel_limit");
           Serial << ", Current limit: " << odriveAxisReadFloat(axis, ".motor.config.current_lim") << '\n';
-
+          
           Serial << "Pos gain: " << odriveAxisReadFloat(axis, ".controller.config.pos_gain");
           Serial << ", Vel gain: " << odriveAxisReadFloat(axis,".controller.config.vel_gain");
           Serial << ", Vel integrator gain: " << odriveAxisReadFloat(axis, ".controller.config.vel_integrator_gain") << "\n";
@@ -284,9 +321,9 @@ void serialEvent() {
         Serial.println(F("Rebooting odrive!"));
         odrive_serial << "sr\n";
       }
-      else if (inputCommand == "invert") {
-         invert = !invert;
-         Serial.println(F("Invert updated!"));
+      else if (inputCommand == "remote_control") {
+        game_state = GS_REMOTE_CONTROL;
+        Serial.println(F("Mode: Remote Control"));
       }
       else if (inputCommand == "start") {
         delay(5000);
@@ -304,8 +341,21 @@ void serialEvent() {
         game_state = GS_IDLE;
         Serial.println(F("Mode: Idle"));
       }
+      else if (inputCommand == "forward" || inputCommand == "left" || inputCommand == "right" || inputCommand == "reverse") {
+        if (game_state == GS_REMOTE_CONTROL) {
+          moveAction(inputCommand, vel);
+          setTimer(TIMEOUT);
+        }
+        else {
+          Serial.println(F("Error: Robot is not in remote control mode..."));
+        }
+      }
+      else if (inputCommand == "invert") {
+         invert = !invert;
+         Serial.println(F("Invert updated!"));
+      }
       else {
-        Serial.println(inputCommand + " is an invalid command...");
+        Serial.println("Error: " + inputCommand + " is an invalid command...");
       }
     }
     
@@ -377,6 +427,16 @@ void help() {
 }
 
 
+void updateTimingParams() {
+  inverseDuration = revolutionsToMicroseconds(CPR, vel, inverseRev);
+  turnDuration = revolutionsToMicroseconds(CPR, vel, turnRev);
+  reverseDuration = revolutionsToMicroseconds(CPR, vel, reverseRev);
+}
+
+unsigned long revolutionsToMicroseconds(float cpr, float vel, float rev) {
+  return ((cpr * rev) / vel) * 1000.0f;
+}
+
 float odriveAxisReadFloat(int axis, String property) {
   odrive_serial << "r axis" << axis << property << '\n';
   return odrive.readFloat();
@@ -420,7 +480,38 @@ void setCurrentMax(float current) {
   }
 }
 
-void moveAction(String action, unsigned long ms, float vel) {
+// void moveAction(String action, unsigned long ms, float vel) {
+  // if (inputCommand == "forward") {
+    // forward(vel);
+    // Serial.println("Forward OK");
+  // } 
+  // else if (inputCommand == "left") {
+    // left(vel);
+    // Serial.println("Left OK");
+  // }
+  // else if (inputCommand == "right") {
+    // right(vel);
+    // Serial.println("Right OK");
+  // }
+  // else if (inputCommand == "reverse") {
+    // reverse(vel);
+    // Serial.println("Reverse OK");
+  // }
+  // //properly initialise motor properties to be even
+  // //getting uneven reverse/forward
+  // //this seems to work!!!!
+  // delay(ms);
+  // inverseMove();
+  // delay(inverseDuration);
+  // brake();
+// }
+
+void setTimer(unsigned long duration) {
+  previousMillis = millis() + duration;
+  counterActive = true;
+}
+
+void moveAction(String action, float vel) {
   if (inputCommand == "forward") {
     forward(vel);
     Serial.println("Forward OK");
@@ -437,13 +528,6 @@ void moveAction(String action, unsigned long ms, float vel) {
     reverse(vel);
     Serial.println("Reverse OK");
   }
-  //properly initialise motor properties to be even
-  //getting uneven reverse/forward
-  //this seems to work!!!!
-  delay(ms);
-  inverseMove();
-  delay(inverseDuration);
-  brake();
 }
 
 void setVelocity(float velAxis0, float velAxis1) {
@@ -474,6 +558,13 @@ void reverse(float vel) {
 void brake() {
   move_state = MS_IDLE;
   setVelocity(0.0f, 0.0f);
+}
+
+void hardBrake() {
+  inverseMove();
+  delay(inverseDuration);
+  brake();
+
 }
 
 void inverseMove() {
